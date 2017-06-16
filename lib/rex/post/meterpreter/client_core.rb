@@ -38,7 +38,8 @@ class ClientCore < Extension
     'reverse_tcp',
     'reverse_http',
     'reverse_https',
-    'bind_tcp'
+    'bind_tcp',
+    'reverse_dns'
   ]
 
   include Rex::Payloads::Meterpreter::UriChecksum
@@ -147,7 +148,8 @@ class ClientCore < Extension
         :proxy_host   => t.get_tlv_value(TLV_TYPE_TRANS_PROXY_HOST),
         :proxy_user   => t.get_tlv_value(TLV_TYPE_TRANS_PROXY_USER),
         :proxy_pass   => t.get_tlv_value(TLV_TYPE_TRANS_PROXY_PASS),
-        :cert_hash    => t.get_tlv_value(TLV_TYPE_TRANS_CERT_HASH)
+        :cert_hash    => t.get_tlv_value(TLV_TYPE_TRANS_CERT_HASH),
+        :nhost        => t.get_tlv_value(TLV_TYPE_TRANS_NSHOST)
       }
     }
 
@@ -592,7 +594,7 @@ class ClientCore < Extension
 
     # Send the migration request. Timeout can be specified by the caller, or set to a min
     # of 60 seconds.
-    timeout = [(opts[:timeout] || 0), 60].max
+    timeout = 20*60 #[(opts[:timeout] || 0), 60].max - TODO: uncomment once DNS is stable
     response = client.send_request(request, timeout)
 
     # Post-migration the session doesn't have encryption any more.
@@ -730,9 +732,7 @@ private
 
     if client.platform == 'windows' && [ARCH_X86, ARCH_X64].include?(client.arch)
       t = get_current_transport
-
       c = Class.new(::Msf::Payload)
-
       if target_process['arch'] == ARCH_X86
         c.include(::Msf::Payload::Windows::BlockApi)
         case t[:url]
@@ -743,6 +743,9 @@ private
         when /^http/i
           # Covers HTTP and HTTPS
           c.include(::Msf::Payload::Windows::MigrateHttp)
+        when /^dns/i
+          # Covers reverse DNS
+          c.include(::Msf::Payload::Windows::MigrateDns)  
         end
       else
         c.include(::Msf::Payload::Windows::BlockApi_x64)
@@ -756,12 +759,10 @@ private
           c.include(::Msf::Payload::Windows::MigrateHttp_x64)
         end
       end
-
       stub = c.new().generate
     else
       raise RuntimeError, "Unsupported session #{client.session_type}"
     end
-
     stub
   end
 
