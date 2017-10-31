@@ -160,7 +160,7 @@ class Tlv
 
     if (value != nil)
       if (type & TLV_META_TYPE_STRING == TLV_META_TYPE_STRING)
-        if (value.kind_of?(Fixnum))
+        if (value.kind_of?(Integer))
           @value = value.to_s
         else
           @value = value.dup
@@ -216,9 +216,14 @@ class Tlv
       when TLV_TYPE_LIBRARY_PATH; "LIBRARY-PATH"
       when TLV_TYPE_TARGET_PATH; "TARGET-PATH"
       when TLV_TYPE_MIGRATE_PID; "MIGRATE-PID"
-      when TLV_TYPE_MIGRATE_LEN; "MIGRATE-LEN"
+      when TLV_TYPE_MIGRATE_PAYLOAD_LEN; "MIGRATE-PAYLOAD-LEN"
       when TLV_TYPE_MIGRATE_PAYLOAD; "MIGRATE-PAYLOAD"
       when TLV_TYPE_MIGRATE_ARCH; "MIGRATE-ARCH"
+      when TLV_TYPE_MIGRATE_BASE_ADDR; "MIGRATE-BASE-ADDR"
+      when TLV_TYPE_MIGRATE_ENTRY_POINT; "MIGRATE-ENTRY-POINT"
+      when TLV_TYPE_MIGRATE_STUB_LEN; "MIGRATE-STUB-LEN"
+      when TLV_TYPE_MIGRATE_STUB; "MIGRATE-STUB"
+      when TLV_TYPE_MIGRATE_SOCKET_PATH; "MIGRATE-SOCKET-PATH"
       when TLV_TYPE_TRANS_TYPE; "TRANS-TYPE"
       when TLV_TYPE_TRANS_URL; "TRANS-URL"
       when TLV_TYPE_TRANS_COMM_TIMEOUT; "TRANS-COMM-TIMEOUT"
