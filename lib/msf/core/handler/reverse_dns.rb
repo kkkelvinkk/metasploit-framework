@@ -51,6 +51,7 @@ module ReverseDns
     self.conn_threads = []
     self.listener_threads = []
     self.listener_pairs = {}
+    self.conn_queue = ::Queue.new
   end
 
   #
@@ -84,7 +85,6 @@ module ReverseDns
   def start_handler
     # Maximum number of seconds to run the handler
     ctimeout = 10
-
     if (exploit_config and exploit_config['active_timeout'])
       ctimeout = exploit_config['active_timeout'].to_i
     end
@@ -107,9 +107,9 @@ module ReverseDns
     self.listener_pairs[phash] = true
 
     # Start a new handling thread
-    self.listener_threads << framework.threads.spawn("BindTcpHandlerListener-#{lport}", false) { 
-      client = nil
-
+    self.listener_threads << framework.threads.spawn("BindTcpHandlerListener-#{lport}", false, self.conn_queue) {  |lqueue|
+      
+      
       print_status("Started bind-DNS handler")
 
       if (rhost == nil)
@@ -128,6 +128,7 @@ module ReverseDns
             
             while (stime + ctimeout > Time.now.to_i)
               begin
+                client = nil
                 client = Rex::Socket::Tcp.create(
                   'PeerHost' => rhost,
                   'PeerPort' => lport.to_i,
@@ -142,7 +143,7 @@ module ReverseDns
                 # Connection refused is a-okay
                 
               rescue ::Exception
-                wlog("Exception caught in bind handler: #{$!.class} #{$!}")
+                wlog("Exception caught in dns-bind handler: #{$!.class} #{$!}")
               end
               
               break if client
@@ -154,6 +155,8 @@ module ReverseDns
             # Valid client connection?
             if (client)
               need_connection = false
+              lqueue.push(client)
+              
               
               # Increment the has connection counter
               self.pending_connections += 1
@@ -173,7 +176,7 @@ module ReverseDns
               # Start a new thread and pass the client connection
               # as the input and output pipe.  Client's are expected
               # to implement the Stream interface.
-              conn_threads << framework.threads.spawn("BindDnsHandlerSession", false, client) { |client_copy|
+              conn_threads << framework.threads.spawn("BindDnsHandlerSession", false, client, lqueue) { |client_copy, lqueue|
                 begin 
                   
                   nosess = false
@@ -227,33 +230,41 @@ module ReverseDns
                       sending_msg << " to #{conn.peerhost}"
                     end
                     print_status(sending_msg)
-
+                    
                     # Send the stage
                     conn.put(p)
                     need_stage = false
                   end
                  
-                  # Session validation #LOGIC IS HERE777#
+                  # Session waiting #LOGIC IS HERE777#
                   loop do
-                    begin 
-                      Rex::ThreadSafe.sleep(1)
+                    Rex::ThreadSafe.sleep(1)
+                    
+                    begin   
                       conn.put("?")
                       answer = conn.read(1)
-                      
-                      if answer == "\x01"
-                        need_connection = true
-                        break
-                      end
-                    
+                    rescue ::Exception
+                      wlog("Exception caught during waiting of session : #{$!.class} #{$!}")
+                      need_connection = true
+                      nosess = true
+                      break
                     end
+                    
+                    if answer == "\x01"
+                      break
+                    end
+                    
                   end
                   
                   Rex::ThreadSafe.sleep(0.5)
                   
                   #Start the session
-                  handle_connection(conn, opts)
-                  
-                  self.send_keepalives = false
+                  if nosess == false
+                    tmp_conn = lqueue.pop         # now this socket will be handled by session
+                    need_connection = true
+                    handle_connection(conn, opts)
+                    self.send_keepalives = false
+                  end
                   
                 rescue
                   elog("Exception raised from BindDns.handle_connection: #{$!}")
@@ -282,12 +293,23 @@ module ReverseDns
     self.listener_threads.each do |t|
       t.kill
     end
+    
+    loop do
+      if self.conn_queue.empty?
+        break
+      else
+        conn = self.conn_queue.pop
+        conn.close    
+      end
+    end
+    
+    self.conn_queue.clear
     self.listener_threads = []
     self.listener_pairs = {}
   end
 
 protected
-
+  attr_accessor :conn_queue # :nodoc:
   attr_accessor :conn_threads # :nodoc:
   attr_accessor :listener_threads # :nodoc:
   attr_accessor :listener_pairs # :nodoc:
