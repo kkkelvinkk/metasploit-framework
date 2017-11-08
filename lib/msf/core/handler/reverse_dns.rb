@@ -10,6 +10,9 @@ module Handler
 # started listening.  This can tend to be rather verbose in terms of traffic
 # and in general it is preferable to use reverse payloads.
 #
+# Authors: Alexey Sintsov, Maxim Andreyanov
+#
+#
 ###
 module ReverseDns
 

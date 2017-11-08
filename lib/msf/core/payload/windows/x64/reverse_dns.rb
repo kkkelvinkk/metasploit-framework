@@ -115,6 +115,10 @@ module Payload::Windows::ReverseDns_x64
     # Shellcode is not optimize to best size, BETA!
     # //TODO optimie shellcode!
     asm = %Q^
+         ;-----------------------------------------------------------------------------;
+         ; Author: Alexey Sintsov (alex.sintsov[at]gmail[dot]com)
+         ; Version: 1.0 (06 November 2017)
+         ;-----------------------------------------------------------------------------;
          ; Input: RBP must be the address of 'api_call'.
          
          ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

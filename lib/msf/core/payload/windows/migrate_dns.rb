@@ -19,7 +19,7 @@ module Payload::Windows::MigrateDns
     super(update_info(info,
       'Name'        => 'DNS Transport Migration (x86)',
       'Description' => 'Migration stub to use over DNS transports via x86',
-      'Author'      => ['Alexey Sintsov'],
+      'Author'      => ['Alexey Sintsov', 'Maksym Andriyanov'],
       'License'     => MSF_LICENSE,
       'Platform'    => 'win',
       'Arch'        => ARCH_X86

@@ -114,6 +114,11 @@ module Payload::Windows::ReverseDns
     # Shellcode is not optimize to best size, TODO...
     # //TODO optimie shellcode!
     asm = %Q^
+    
+         ;-----------------------------------------------------------------------------;
+         ; Author: Alexey Sintsov (alex.sintsov[at]gmail[dot]com)
+         ; Version: 1.0 (06 November 2017)
+         ;-----------------------------------------------------------------------------;
          ; Input: EBP must be the address of 'api_call'.
 
          ;;;;;;;;; Load DNS API lib ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
