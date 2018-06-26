@@ -172,7 +172,7 @@ module ReverseDns
                 :retry_total  => datastore['SessionRetryTotal'].to_i,
                 :retry_wait   => datastore['SessionRetryWait'].to_i,
                 :timeout      => 60*20,
-                :send_keepalives => false
+                :send_keepalives => true
               }
               
               
@@ -183,13 +183,14 @@ module ReverseDns
                 begin 
                   
                   nosess = false
+                  need_send_stage = (need_stage and self.payload_type != Msf::Payload::Type::Single)
                   #SEND our SERVER_ID to the DNS 
-                  client_copy.put([server_id.length].pack("C") + server_id)
+                  client_copy.put([server_id.length+1].pack("C") + server_id + (need_send_stage ? "\x02" : "\x01"))
                   conn = client_copy
                   
                   #First connect,  stage is needed? (or it not the first session and stage alredy there..
                   #    or it is a stageless payload)
-                  if (need_stage == true and self.payload_type != Msf::Payload::Type::Single) 
+                  if need_send_stage 
                     if respond_to? :include_send_uuid
                       if include_send_uuid
                         uuid_raw = conn.get_once(16, 1)
@@ -266,7 +267,7 @@ module ReverseDns
                     tmp_conn = lqueue.pop         # now this socket will be handled by session
                     need_connection = true
                     handle_connection(conn, opts)
-                    self.send_keepalives = false
+                    self.send_keepalives = true
                   end
                   
                 rescue
