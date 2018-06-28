@@ -172,7 +172,7 @@ module ReverseDns
                 :retry_total  => datastore['SessionRetryTotal'].to_i,
                 :retry_wait   => datastore['SessionRetryWait'].to_i,
                 :timeout      => 60*20,
-                :send_keepalives => true
+                :send_keepalives => false
               }
               
               
@@ -267,7 +267,7 @@ module ReverseDns
                     tmp_conn = lqueue.pop         # now this socket will be handled by session
                     need_connection = true
                     handle_connection(conn, opts)
-                    self.send_keepalives = true
+                    self.send_keepalives = false
                   end
                   
                 rescue
