@@ -1119,7 +1119,7 @@ class Core
     sid      = nil
     cmds     = []
     script   = nil
-    response_timeout = 15
+    response_timeout = 1200 # TODO: this set for DNS, should be 15
     search_term = nil
     session_name = nil
 
