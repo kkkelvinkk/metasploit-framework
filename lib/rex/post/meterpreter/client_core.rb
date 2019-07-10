@@ -702,6 +702,10 @@ class ClientCore < Extension
     return true
   end
 
+  def secure
+    client.tlv_enc_key = negotiate_tlv_encryption
+  end
+
   #
   # Shuts the session down
   #
