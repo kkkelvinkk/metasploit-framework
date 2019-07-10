@@ -61,6 +61,7 @@ class Framework
   require 'msf/core/db_manager'
   require 'msf/core/event_dispatcher'
   require 'rex/json_hash_file'
+  require 'msf/core/cert_provider'
 
   #
   # Creates an instance of the framework context.
@@ -79,10 +80,14 @@ class Framework
     self.jobs      = Rex::JobContainer.new
     self.plugins   = PluginManager.new(self)
     self.uuid_db   = Rex::JSONHashFile.new(::File.join(Msf::Config.config_directory, "payloads.json"))
+    self.analyze   = Analyze.new(self)
     self.browser_profiles = Hash.new
 
     # Configure the thread factory
     Rex::ThreadFactory.provider = Metasploit::Framework::ThreadFactoryProvider.new(framework: self)
+
+    # Configure the SSL certificate generator
+    Rex::Socket::Ssl.cert_provider = Msf::Ssl::CertProvider
 
     subscriber = FrameworkEventSubscriber.new(self)
     events.add_exploit_subscriber(subscriber)
@@ -188,6 +193,11 @@ class Framework
   # different contexts.
   #
   attr_reader   :browser_profiles
+  #
+  # The framework instance's analysis utility.  Provide method to analyze
+  # framework objects to offer related objects/actions available.
+  #
+  attr_reader   :analyze
 
   # The framework instance's db manager. The db manager
   # maintains the database db and handles db events
@@ -229,24 +239,8 @@ class Framework
     }
   end
 
+  # TODO: Anything still using this should be ported to use metadata::cache search
   def search(match, logger: nil)
-    # Check if the database is usable
-    use_db = true
-    if self.db
-      if !(self.db.migrated && self.db.modules_cached)
-        logger.print_warning("Module database cache not built yet, using slow search") if logger
-        use_db = false
-      end
-    else
-      logger.print_warning("Database not connected, using slow search") if logger
-      use_db = false
-    end
-
-    # Used the database for search
-    if use_db
-      return self.db.search_modules(match)
-    end
-
     # Do an in-place search
     matches = []
     [ self.exploits, self.auxiliary, self.post, self.payloads, self.nops, self.encoders ].each do |mset|
@@ -280,6 +274,7 @@ protected
   attr_writer   :db # :nodoc:
   attr_writer   :uuid_db # :nodoc:
   attr_writer   :browser_profiles # :nodoc:
+  attr_writer   :analyze # :nodoc:
 end
 
 class FrameworkEventSubscriber

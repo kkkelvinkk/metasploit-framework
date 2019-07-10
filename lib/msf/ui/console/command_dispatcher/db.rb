@@ -3,6 +3,7 @@
 require 'rexml/document'
 require 'rex/parser/nmap_xml'
 require 'msf/core/db_export'
+require 'msf/ui/console/command_dispatcher/db/analyze'
 
 module Msf
 module Ui
@@ -15,7 +16,8 @@ class Db
 
   include Msf::Ui::Console::CommandDispatcher
   include Msf::Ui::Console::CommandDispatcher::Common
- 
+  include Msf::Ui::Console::CommandDispatcher::Analyze
+
   #
   # The dispatcher's name.
   #
@@ -43,7 +45,8 @@ class Db
       "db_import"     => "Import a scan result file (filetype will be auto-detected)",
       "db_export"     => "Export a file containing the contents of the database",
       "db_nmap"       => "Executes nmap and records the output automatically",
-      "db_rebuild_cache" => "Rebuilds the database-stored module cache"
+      "db_rebuild_cache" => "Rebuilds the database-stored module cache",
+      "analyze"       => "Analyze database information about a specific address or address range",
     }
 
     # Always include commands that only make sense when connected.
@@ -354,6 +357,8 @@ class Db
     end
   end
 
+  @@hosts_columns = [ 'address', 'mac', 'name', 'os_name', 'os_flavor', 'os_sp', 'purpose', 'info', 'comments']
+
   def cmd_hosts(*args)
     return unless active?
   ::ActiveRecord::Base.connection_pool.with_connection {
@@ -371,7 +376,7 @@ class Db
     default_columns << 'tags' # Special case
     virtual_columns = [ 'svcs', 'vulns', 'workspace', 'tags' ]
 
-    col_search = [ 'address', 'mac', 'name', 'os_name', 'os_flavor', 'os_sp', 'purpose', 'info', 'comments']
+    col_search = @@hosts_columns
 
     default_columns.delete_if {|v| (v[-2,2] == "id")}
     while (arg = args.shift)
@@ -380,7 +385,7 @@ class Db
         mode << :add
       when '-d','--delete'
         mode << :delete
-      when '-c'
+      when '-c','-C'
         list = args.shift
         if(!list)
           print_error("Invalid column list")
@@ -394,6 +399,10 @@ class Db
             return
           end
         }
+        if (arg == '-C')
+          @@hosts_columns = col_search
+        end
+ 
       when '-u','--up'
         onlyup = true
       when '-o'
@@ -426,6 +435,7 @@ class Db
         print_line "  -a,--add          Add the hosts instead of searching"
         print_line "  -d,--delete       Delete the hosts instead of searching"
         print_line "  -c <col1,col2>    Only show the given columns (see list below)"
+        print_line "  -C <col1,col2>    Only show the given columns until the next restart (see list below)"
         print_line "  -h,--help         Show this help information"
         print_line "  -u,--up           Only show hosts which are up"
         print_line "  -o <file>         Send output to a file in csv format"
@@ -724,6 +734,10 @@ class Db
     each_host_range_chunk(host_ranges) do |host_search|
       framework.db.services(framework.db.workspace, onlyup, proto, host_search, ports, names).each do |service|
 
+        unless service.state == 'open'
+          next if onlyup
+        end
+
         host = service.host
         if search_term
           next unless(
@@ -746,7 +760,6 @@ class Db
       end
     end
 
-    print_line
     if (output_file == nil)
       print_line(tbl.to_s)
     else
@@ -770,6 +783,7 @@ class Db
     print_line "Usage: vulns [addr range]"
     print_line
     print_line "  -h,--help             Show this help information"
+    print_line "  -o <file>             Send output to a file in csv format"
     print_line "  -p,--port <portspec>  List vulns matching this port spec"
     print_line "  -s <svc names>        List vulns matching these service names"
     print_line "  -R,--rhosts           Set RHOSTS from the results of the search"
@@ -794,6 +808,7 @@ class Db
     search_term = nil
     show_info   = false
     set_rhosts  = false
+    output_file = nil
 
     # Short-circuit help
     if args.delete "-h"
@@ -810,6 +825,14 @@ class Db
       when "-h","--help"
         cmd_vulns_help
         return
+      when "-o", "--output"
+        output_file = args.shift
+        if output_file
+          output_file = File.expand_path(output_file)
+        else
+          print_error("Invalid output filename")
+          return
+        end
       when "-p","--port"
         unless (arg_port_range(args.shift, port_ranges, true))
           return
@@ -839,6 +862,10 @@ class Db
     host_ranges.push(nil) if host_ranges.empty?
     ports = port_ranges.flatten.uniq
     svcs.flatten!
+    tbl = Rex::Text::Table.new(
+        'Header' => 'Vulnerabilities',
+        'Columns' => ['Timestamp', 'Host', 'Name', 'References', 'Information']
+      )
 
     each_host_range_chunk(host_ranges) do |host_search|
       framework.db.hosts(framework.db.workspace, false, host_search).each do |host|
@@ -850,25 +877,45 @@ class Db
             )
           end
           reflist = vuln.refs.map { |r| r.name }
+
           if(vuln.service)
             # Skip this one if the user specified a port and it
             # doesn't match.
             next unless ports.empty? or ports.include? vuln.service.port
             # Same for service names
             next unless svcs.empty? or svcs.include?(vuln.service.name)
-            print_status("Time: #{vuln.created_at} Vuln: host=#{host.address} name=#{vuln.name} refs=#{reflist.join(',')} #{(show_info && vuln.info) ? "info=#{vuln.info}" : ""}")
-
           else
             # This vuln has no service, so it can't match
             next unless ports.empty? and svcs.empty?
-            print_status("Time: #{vuln.created_at} Vuln: host=#{host.address} name=#{vuln.name} refs=#{reflist.join(',')} #{(show_info && vuln.info) ? "info=#{vuln.info}" : ""}")
           end
+
+          print_status("Time: #{vuln.created_at} Vuln: host=#{host.address} name=#{vuln.name} refs=#{reflist.join(',')} #{(show_info && vuln.info) ? "info=#{vuln.info}" : ""}")
+
+          if output_file
+            row = []
+            row << vuln.created_at
+            row << host.address
+            row << vuln.name
+            row << reflist * ","
+            if show_info && vuln.info
+              row << "info=#{vuln.info}"
+            else
+              row << ''
+            end
+            tbl << row
+          end
+
           if set_rhosts
             addr = (host.scope ? host.address + '%' + host.scope : host.address)
             rhosts << addr
           end
         end
       end
+    end
+
+    if output_file
+      File.write(output_file, tbl.to_csv)
+      print_status("Wrote vulnerability information to #{output_file}")
     end
 
     # Finally, handle the case where the user wants the resulting list
@@ -1063,9 +1110,10 @@ class Db
         csv_note << note.ntype
         csv_note << note.data.inspect
       end
-      print_status(msg)
       if out_file
         csv_table << csv_note
+      else
+        print_status(msg)
       end
       if mode == :delete
         note.destroy
@@ -1338,6 +1386,7 @@ class Db
     print_line "    CI"
     print_line "    Foundstone"
     print_line "    FusionVM XML"
+    print_line "    Group Policy Preferences Credentials"
     print_line "    IP Address List"
     print_line "    IP360 ASPL"
     print_line "    IP360 XML v3"
@@ -1826,6 +1875,8 @@ class Db
     if (path)
       auth, dest = path.split('@')
       (dest = auth and auth = nil) if not dest
+      # remove optional scheme in database url
+      auth = auth.sub(/^\w+:\/\//, "") if auth
       res[:user],res[:pass] = auth.split(':') if auth
       targ,name = dest.split('/')
       (name = targ and targ = nil) if not name

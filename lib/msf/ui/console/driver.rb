@@ -32,7 +32,8 @@ class Driver < Msf::Ui::Driver
   CommandDispatchers = [
     CommandDispatcher::Modules,
     CommandDispatcher::Jobs,
-    CommandDispatcher::Resource
+    CommandDispatcher::Resource,
+    CommandDispatcher::Developer
   ]
 
   #
@@ -44,6 +45,8 @@ class Driver < Msf::Ui::Driver
   # The console driver is a command shell.
   #
   include Rex::Ui::Text::DispatcherShell
+
+  include Rex::Ui::Text::Resource
 
   #
   # Initializes a console driver instance with the supplied prompt string and
@@ -138,15 +141,6 @@ class Driver < Msf::Ui::Driver
       print_error("***")
     end
 
-    begin
-      require 'openssl'
-    rescue ::LoadError
-      print_error("***")
-      print_error("* WARNING: No OpenSSL support. This is required by meterpreter payloads and many exploits")
-      print_error("* Please install the ruby-openssl package (apt-get install libopenssl-ruby on Debian/Ubuntu")
-      print_error("***")
-    end
-
     # Register event handlers
     register_event_handlers
 
@@ -191,24 +185,10 @@ class Driver < Msf::Ui::Driver
         end
       end
 
-      # framework.db.active will be true if after_establish_connection ran directly when connection_established? was
-      # already true or if framework.db.connect called after_establish_connection.
-      if !! framework.db.error
-        if framework.db.error.to_s =~ /RubyGem version.*pg.*0\.11/i
-          print_error("***")
-          print_error("*")
-          print_error("* Metasploit now requires version 0.11 or higher of the 'pg' gem for database support")
-          print_error("* There a three ways to accomplish this upgrade:")
-          print_error("* 1. If you run Metasploit with your system ruby, simply upgrade the gem:")
-          print_error("*    $ rvmsudo gem install pg ")
-          print_error("* 2. Use the Community Edition web interface to apply a Software Update")
-          print_error("* 3. Uninstall, download the latest version, and reinstall Metasploit")
-          print_error("*")
-          print_error("***")
-          print_error("")
-          print_error("")
-        end
-
+      # framework.db.active will be true if after_establish_connection ran
+      # directly when connection_established? was already true or if
+      # framework.db.connect called after_establish_connection.
+      if !!framework.db.error
         print_error("Failed to connect to the database: #{framework.db.error}")
       end
     end
@@ -219,7 +199,7 @@ class Driver < Msf::Ui::Driver
       self.framework.init_module_paths(module_paths: opts['ModulePath'])
     end
 
-    if framework.db.active && !opts['DeferModuleLoads']
+    if !opts['DeferModuleLoads']
       framework.threads.spawn("ModuleCacheRebuild", true) do
         framework.modules.refresh_cache_from_module_files
       end
@@ -242,114 +222,28 @@ class Driver < Msf::Ui::Driver
       }
     end
 
+    # Process persistent job handler
+    begin
+      restore_handlers = JSON.parse(File.read(Msf::Config.persist_file))
+    rescue Errno::ENOENT, JSON::ParserError
+      restore_handlers = nil
+    end
+
+    if restore_handlers
+      print_status("Starting persistent handler(s)...")
+
+      restore_handlers.each do |handler_opts|
+        handler = framework.modules.create(handler_opts['mod_name'])
+        handler.exploit_simple(handler_opts['mod_options'])
+      end
+    end
+
     # Process any additional startup commands
     if opts['XCommands'] and opts['XCommands'].kind_of? Array
       opts['XCommands'].each { |c|
         run_single(c)
       }
     end
-  end
-
-  #
-  # Configure a default output path for jUnit XML output
-  #
-  def junit_setup(output_path)
-    output_path = ::File.expand_path(output_path)
-
-    ::FileUtils.mkdir_p(output_path)
-    @junit_output_path = output_path
-    @junit_error_count = 0
-    print_status("Test Output: #{output_path}")
-
-    # We need at least one test success in order to pass
-    junit_pass("framework_loaded")
-  end
-
-  #
-  # Emit a new jUnit XML output file representing an error
-  #
-  def junit_error(tname, ftype, data = nil)
-
-    if not @junit_output_path
-      raise RuntimeError, "No output path, call junit_setup() first"
-    end
-
-    data ||= framework.inspect.to_s
-
-    e = REXML::Element.new("testsuite")
-
-    c = REXML::Element.new("testcase")
-    c.attributes["classname"] = "msfrc"
-    c.attributes["name"]  = tname
-
-    f = REXML::Element.new("failure")
-    f.attributes["type"] = ftype
-
-    f.text = data
-    c << f
-    e << c
-
-    bname = ("msfrpc_#{tname}").gsub(/[^A-Za-z0-9\.\_]/, '')
-    bname << "_" + Digest::MD5.hexdigest(tname)
-
-    fname = ::File.join(@junit_output_path, "#{bname}.xml")
-    cnt   = 0
-    while ::File.exist?( fname )
-      cnt  += 1
-      fname = ::File.join(@junit_output_path, "#{bname}_#{cnt}.xml")
-    end
-
-    ::File.open(fname, "w") do |fd|
-      fd.write(e.to_s)
-    end
-
-    print_error("Test Error: #{tname} - #{ftype} - #{data}")
-  end
-
-  #
-  # Emit a new jUnit XML output file representing a success
-  #
-  def junit_pass(tname)
-
-    if not @junit_output_path
-      raise RuntimeError, "No output path, call junit_setup() first"
-    end
-
-    # Generate the structure of a test case run
-    e = REXML::Element.new("testsuite")
-    c = REXML::Element.new("testcase")
-    c.attributes["classname"] = "msfrc"
-    c.attributes["name"]  = tname
-    e << c
-
-    # Generate a unique name
-    bname = ("msfrpc_#{tname}").gsub(/[^A-Za-z0-9\.\_]/, '')
-    bname << "_" + Digest::MD5.hexdigest(tname)
-
-    # Generate the output path, allow multiple test with the same name
-    fname = ::File.join(@junit_output_path, "#{bname}.xml")
-    cnt   = 0
-    while ::File.exist?( fname )
-      cnt  += 1
-      fname = ::File.join(@junit_output_path, "#{bname}_#{cnt}.xml")
-    end
-
-    # Write to our test output location, as specified with junit_setup
-    ::File.open(fname, "w") do |fd|
-      fd.write(e.to_s)
-    end
-
-    print_good("Test Pass: #{tname}")
-  end
-
-
-  #
-  # Emit a jUnit XML output file and throw a fatal exception
-  #
-  def junit_fatal_error(tname, ftype, data)
-    junit_error(tname, ftype, data)
-    print_error("Exiting")
-    run_single("exit -y")
   end
 
   #
@@ -421,74 +315,6 @@ class Driver < Msf::Ui::Driver
     rescue ::Exception
       print_error("Failed to save console config: #{$!}")
     end
-  end
-
-  # Processes a resource script file for the console.
-  #
-  # @param path [String] Path to a resource file to run
-  # @return [void]
-  def load_resource(path)
-    if path == '-'
-      resource_file = $stdin.read
-      path = 'stdin'
-    elsif ::File.exist?(path)
-      resource_file = ::File.read(path)
-    else
-      print_error("Cannot find resource script: #{path}")
-      return
-    end
-
-    self.active_resource = resource_file
-
-    # Process ERB directives first
-    print_status "Processing #{path} for ERB directives."
-    erb = ERB.new(resource_file)
-    processed_resource = erb.result(binding)
-
-    lines = processed_resource.each_line.to_a
-    bindings = {}
-    while lines.length > 0
-
-      line = lines.shift
-      break if not line
-      line.strip!
-      next if line.length == 0
-      next if line =~ /^#/
-
-      # Pretty soon, this is going to need an XML parser :)
-      # TODO: case matters for the tag and for binding names
-      if line =~ /<ruby/
-        if line =~ /\s+binding=(?:'(\w+)'|"(\w+)")(>|\s+)/
-          bin = ($~[1] || $~[2])
-          bindings[bin] = binding unless bindings.has_key? bin
-          bin = bindings[bin]
-        else
-          bin = binding
-        end
-        buff = ''
-        while lines.length > 0
-          line = lines.shift
-          break if not line
-          break if line =~ /<\/ruby>/
-          buff << line
-        end
-        if ! buff.empty?
-          print_status("resource (#{path})> Ruby Code (#{buff.length} bytes)")
-          begin
-            eval(buff, bin)
-          rescue ::Interrupt
-            raise $!
-          rescue ::Exception => e
-            print_error("resource (#{path})> Ruby Error: #{e.class} #{e} #{e.backtrace}")
-          end
-        end
-      else
-        print_line("resource (#{path})> #{line}")
-        run_single(line)
-      end
-    end
-
-    self.active_resource = nil
   end
 
   #
@@ -573,27 +399,24 @@ class Driver < Msf::Ui::Driver
   #
   def on_variable_set(glob, var, val)
     case var.downcase
-      when "payload"
-
-        if (framework and framework.payloads.valid?(val) == false)
-          return false
-        elsif active_module && active_module.type == 'exploit' && !active_module.is_payload_compatible?(val)
-          return false
-        elsif (active_module)
-          active_module.datastore.clear_non_user_defined
-        elsif (framework)
-          framework.datastore.clear_non_user_defined
-        end
-      when "sessionlogging"
-        handle_session_logging(val) if (glob)
-      when "consolelogging"
-        handle_console_logging(val) if (glob)
-      when "loglevel"
-        handle_loglevel(val) if (glob)
-      when "prompt"
-        update_prompt(val, framework.datastore['PromptChar'] || DefaultPromptChar, true)
-      when "promptchar"
-        update_prompt(framework.datastore['Prompt'] || DefaultPrompt, val, true)
+    when 'payload'
+      if framework && !framework.payloads.valid?(val)
+        return false
+      elsif active_module && active_module.type == 'exploit' && !active_module.is_payload_compatible?(val)
+        return false
+      elsif active_module
+        active_module.datastore.clear_non_user_defined
+      elsif framework
+        framework.datastore.clear_non_user_defined
+      end
+    when 'sessionlogging'
+      handle_session_logging(val) if glob
+    when 'consolelogging'
+      handle_console_logging(val) if glob
+    when 'loglevel'
+      handle_loglevel(val) if glob
+    when 'ssh_ident'
+      handle_ssh_ident(val)
     end
   end
 
@@ -603,12 +426,27 @@ class Driver < Msf::Ui::Driver
   #
   def on_variable_unset(glob, var)
     case var.downcase
-      when "sessionlogging"
-        handle_session_logging('0') if (glob)
-      when "consolelogging"
-        handle_console_logging('0') if (glob)
-      when "loglevel"
-        handle_loglevel(nil) if (glob)
+    when 'sessionlogging'
+      handle_session_logging('0') if glob
+    when 'consolelogging'
+      handle_console_logging('0') if glob
+    when 'loglevel'
+      handle_loglevel(nil) if glob
+    end
+  end
+
+  #
+  # Proxies to shell.rb's update prompt with our own extras
+  #
+  def update_prompt(*args)
+    if args.empty?
+      pchar = framework.datastore['PromptChar'] || DefaultPromptChar
+      p = framework.datastore['Prompt'] || DefaultPrompt
+      p = "#{p} #{active_module.type}(%bld%red#{active_module.promptname}%clr)" if active_module
+      super(p, pchar)
+    else
+      # Don't squash calls from within lib/rex/ui/text/shell.rb
+      super(*args)
     end
   end
 
@@ -632,10 +470,6 @@ class Driver < Msf::Ui::Driver
   # The active session associated with the driver.
   #
   attr_accessor :active_session
-  #
-  # The active resource file being processed by the driver
-  #
-  attr_accessor :active_resource
 
   def stop
     framework.events.on_ui_stop()
@@ -675,6 +509,13 @@ protected
           print_error("Permission denied exec: #{line}")
         end
         self.busy = false
+        return
+      elsif framework.modules.create(method)
+        super
+        if prompt_yesno "This is a module we can load. Do you want to use #{method}?"
+          run_single "use #{method}"
+        end
+
         return
       end
     end
@@ -728,6 +569,34 @@ protected
   def handle_loglevel(val)
     set_log_level(Rex::LogSource, val)
     set_log_level(Msf::LogSource, val)
+  end
+
+  #
+  # This method monkeypatches Net::SSH's client identification string
+  #
+  # TODO: Move this out of the console driver!
+  #
+  def handle_ssh_ident(val)
+    # HACK: Suppress already initialized constant warning
+    verbose, $VERBOSE = $VERBOSE, nil
+
+    return false unless val.is_a?(String) && !val.empty?
+
+    require 'net/ssh'
+
+    # HACK: Bypass dynamic constant assignment error
+    ::Net::SSH::Transport::ServerVersion.const_set(:PROTO_VERSION, val)
+
+    true
+  rescue LoadError
+    print_error('Net::SSH could not be loaded')
+    false
+  rescue NameError
+    print_error('Invalid constant Net::SSH::Transport::ServerVersion::PROTO_VERSION')
+    false
+  ensure
+    # Restore warning
+    $VERBOSE = verbose
   end
 
   # Require the appropriate readline library based on the user's preference.

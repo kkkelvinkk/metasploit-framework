@@ -59,9 +59,15 @@ module Msf
     # @!attribute  nops
     #   @return [Integer] The size in bytes of NOP sled to prepend the payload with
     attr_accessor :nops
+    # @!attribute  padnops
+    #   @return [Boolean] Whether to use @!attribute nops as the total payload size
+    attr_accessor :padnops
     # @!attribute  payload
     #   @return [String] The refname of the payload to generate
     attr_accessor :payload
+    # @!attribute  payload_module
+    #   @return [Module] The payload module object if applicable
+    attr_accessor :payload_module
     # @!attribute  platform
     #   @return [String] The platform to build the payload for
     attr_accessor :platform
@@ -97,6 +103,7 @@ module Msf
     # @option opts [Integer] :space (see #space)
     # @option opts [Integer] :encoder_space (see #encoder_space)
     # @option opts [Integer] :nops (see #nops)
+    # @option opts [Boolean] :padnops (see #padnops)
     # @option opts [String] :add_code (see #add_code)
     # @option opts [Boolean] :keep (see #keep)
     # @option opts [Hash] :datastore (see #datastore)
@@ -115,6 +122,7 @@ module Msf
       @iterations = opts.fetch(:iterations, 1)
       @keep       = opts.fetch(:keep, false)
       @nops       = opts.fetch(:nops, 0)
+      @padnops    = opts.fetch(:padnops, false)
       @payload    = opts.fetch(:payload, '')
       @platform   = opts.fetch(:platform, '')
       @space      = opts.fetch(:space, 1.gigabyte)
@@ -126,8 +134,14 @@ module Msf
 
       @framework  = opts.fetch(:framework)
 
-      raise ArgumentError, "Invalid Payload Selected" unless payload_is_valid?
-      raise ArgumentError, "Invalid Format Selected" unless format_is_valid?
+      raise InvalidFormat, "invalid format: #{format}"  unless format_is_valid?
+      raise ArgumentError, "invalid payload: #{payload}" unless payload_is_valid?
+
+      # A side-effecto of running framework.payloads.create is that
+      # framework.payloads.keys gets pruned of unloadable payloads. So, we do it
+      # after checking payload_is_valid?, which refers to the cached keys.
+      @payload_module = framework.payloads.create(@payload)
+      raise ArgumentError, "unloadable payload: #{payload}" unless payload_module || @payload == 'stdin'
 
       # In smallest mode, override the payload @space & @encoder_space settings
       if @smallest
@@ -159,12 +173,12 @@ module Msf
     # This method takes a payload module and tries to reconcile a chosen
     # arch with the arches supported by the module.
     # @param mod [Msf::Payload] The module class to choose an arch for
-    # @return [String] String form of the Arch if a valid arch found
+    # @return [String] String form of the arch if a valid arch found
     # @return [Nil] if no valid arch found
     def choose_arch(mod)
       if arch.blank?
         @arch = mod.arch.first
-        cli_print "No Arch selected, selecting Arch: #{arch} from the payload"
+        cli_print "[-] No arch selected, selecting arch: #{arch} from the payload"
         datastore['ARCH'] = arch if mod.kind_of?(Msf::Payload::Generic)
         return mod.arch.first
       elsif mod.arch.include? arch
@@ -186,7 +200,7 @@ module Msf
 
       if chosen_platform.platforms.empty?
         chosen_platform = mod.platform
-        cli_print "No platform was selected, choosing #{chosen_platform.platforms.first} from the payload"
+        cli_print "[-] No platform was selected, choosing #{chosen_platform.platforms.first} from the payload"
         @platform = mod.platform.platforms.first.to_s.split("::").last
       elsif (chosen_platform & mod.platform).empty?
         chosen_platform = Msf::Module::PlatformList.new
@@ -276,6 +290,16 @@ module Msf
     # @param shellcode [String] the processed shellcode to be formatted
     # @return [String] The final formatted form of the payload
     def format_payload(shellcode)
+
+      if Msf::Util::EXE.elf?(shellcode) && format.downcase != 'elf'
+        # TODO: force generation from stager/stage if available
+        raise InvalidFormat, 'selected payload can only generate ELF files'
+      end
+      if Msf::Util::EXE.macho?(shellcode) && format.downcase != 'macho'
+        # TODO: force generation from stager/stage if available
+        raise InvalidFormat, 'selected payload can only generate MACHO files'
+      end
+
       case format.downcase
         when "js_be"
           if Rex::Arch.endian(arch) != ENDIAN_BIG
@@ -297,8 +321,7 @@ module Msf
     # produce a JAR or WAR file for the java payload.
     # @return [String] Java payload as a JAR or WAR file
     def generate_java_payload
-      payload_module = framework.payloads.create(payload)
-      payload_module.datastore.merge!(datastore)
+      payload_module.datastore.import_options_from_hash(datastore)
       case format
       when "raw", "jar"
         if payload_module.respond_to? :generate_jar
@@ -329,31 +352,34 @@ module Msf
     def generate_payload
       if platform == "java" or arch == "java" or payload.start_with? "java/"
         raw_payload = generate_java_payload
-        cli_print "Payload size: #{raw_payload.length} bytes"
+        encoded_payload = raw_payload
         gen_payload = raw_payload
       elsif payload.start_with? "android/" and not template.blank?
         cli_print "Using APK template: #{template}"
         apk_backdoor = ::Msf::Payload::Apk.new
         raw_payload = apk_backdoor.backdoor_apk(template, generate_raw_payload)
-        cli_print "Payload size: #{raw_payload.length} bytes"
         gen_payload = raw_payload
       else
         raw_payload = generate_raw_payload
         raw_payload = add_shellcode(raw_payload)
 
         if encoder != nil and encoder.start_with?("@")
-          encoded_payload = multiple_encode_payload(raw_payload)
+          raw_payload = multiple_encode_payload(raw_payload)
         else
-          encoded_payload = encode_payload(raw_payload)
+          raw_payload = encode_payload(raw_payload)
         end
-        encoded_payload = prepend_nops(encoded_payload)
-        cli_print "Payload size: #{encoded_payload.length} bytes"
-        gen_payload = format_payload(encoded_payload)
+        if padnops
+          @nops = nops - raw_payload.length
+        end
+        raw_payload = prepend_nops(raw_payload)
+        gen_payload = format_payload(raw_payload)
       end
+
+      cli_print "Payload size: #{raw_payload.length} bytes"
 
       if gen_payload.nil?
         raise PayloadGeneratorError, 'The payload could not be generated, check options'
-      elsif gen_payload.length > @space and not @smallest
+      elsif raw_payload.length > @space and not @smallest
         raise PayloadSpaceViolation, 'The payload exceeds the specified space'
       else
         if format.to_s != 'raw'
@@ -363,7 +389,6 @@ module Msf
         gen_payload
       end
     end
-
 
     # This method generates the raw form of the payload as generated by the payload module itself.
     # @raise [Msf::IncompatiblePlatform] if no platform was selected for a stdin payload
@@ -380,8 +405,6 @@ module Msf
         end
         stdin
       else
-        payload_module = framework.payloads.create(payload)
-
         chosen_platform = choose_platform(payload_module)
         if chosen_platform.platforms.empty?
           raise IncompatiblePlatform, "The selected platform is incompatible with the payload"
@@ -412,11 +435,15 @@ module Msf
         encoder.split(',').each do |chosen_encoder|
           e = framework.encoders.create(chosen_encoder)
           if e.nil?
-            cli_print "Skipping invalid encoder #{chosen_encoder}"
+            cli_print "[-] Skipping invalid encoder #{chosen_encoder}"
             next
           end
           e.datastore.import_options_from_hash(datastore)
           encoders << e if e
+        end
+        if encoders.empty?
+          cli_print "[!] Couldn't find encoder to use"
+          return encoders
         end
         encoders.sort_by { |my_encoder| my_encoder.rank }.reverse
       elsif !badchars.empty? && !badchars.nil?
@@ -456,9 +483,9 @@ module Msf
           nop = framework.nops.create(name)
           raw = nop.generate_sled(nops, {'BadChars' => badchars, 'SaveRegisters' => [ 'esp', 'ebp', 'esi', 'edi' ] })
           if raw
-            cli_print "Successfully added NOP sled from #{name}"
+            cli_print "Successfully added NOP sled of size #{raw.length} from #{name}"
             return raw + shellcode
-          end
+         end
         end
       else
         shellcode
