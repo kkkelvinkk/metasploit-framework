@@ -1,6 +1,6 @@
 # vim: set noexpandtab:
 
-CC := cl
+CC := clang-cl
 
 CFLAGS  := /nologo
 LDFLAGS := /nologo
